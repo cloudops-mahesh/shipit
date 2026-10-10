@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>ShipIt | Release Console</title>
+  <link rel='stylesheet' href='styles.css'>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class='eyebrow'>Release console</p>
+        <h1>ShipIt</h1>
+      </div>
+      <span id='status' class='pill'>Checking</span>
+    </header>
+    <section class='grid'>
+      <article class='card wide'><h2>Live commit</h2><p id='commit' class='mono big'>-</p></article>
+      <article class='card'><h2>Version</h2><p id='version' class='big'>-</p></article>
+      <article class='card'><h2>Environment</h2><p id='environment' class='big'>-</p></article>
+      <article class='card'><h2>Runtime</h2><p id='runtime' class='big'>-</p></article>
+      <article class='card wide'><h2>Serving pod</h2><p id='pod' class='mono'>-</p></article>
+      <article class='card wide'><h2>Pod uptime</h2><p id='uptime' class='big'>-</p></article>
+    </section>
+    <footer>Refreshes every 5 seconds. The pod name changes as the Service balances across replicas.</footer>
+  </main>
+  <script src='app.js'></script>
+</body>
+</html>
