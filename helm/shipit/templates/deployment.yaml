@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}          # filled in by Helm with the release name ("shipit")
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 5            # keep 5 old versions for rollback
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                    # during an update, allow 1 extra pod
+      maxUnavailable: 0              # never drop below 2 running pods
+  selector:
+    matchLabels:                     # "the pods I manage are the ones with this label"
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:                          # everything below describes each pod
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false   # the app never calls the Kubernetes API, so give it no credentials
+      securityContext:
+        runAsNonRoot: true           # Kubernetes refuses to start the container if it would run as root
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault       # block unusual system calls
+      containers:
+        - name: app
+          # "required" makes the deploy fail with a clear message if the pipeline forgets a value
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: APP_ENV          # this is what turns "local" into "production" in the UI
+              value: {{ .Values.appEnv | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true     # the app cannot write to its own filesystem
+            capabilities:
+              drop: ["ALL"]          # remove every special Linux privilege
+          readinessProbe:            # "is this pod ready for traffic?" If not, the Service skips it
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:             # "is this pod still alive?" If not, Kubernetes restarts it
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
