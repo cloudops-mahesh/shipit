@@ -1,0 +1,124 @@
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel an older PR run when a newer commit arrives; never cancel runs on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Default: read-only. Jobs ask for more only when they need it.
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  APP: shipit
+  CLUSTER_NAME: shipit
+  NAMESPACE: shipit
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full Git history, so SonarQube can tell new code from old
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm              # reuse downloaded packages between runs
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test             # also writes coverage/lcov.info for SonarQube
+      - name: Lint Helm chart
+        run: helm lint helm/shipit --set image.repository=example --set image.tag=test
+      - name: SonarQube analysis and quality gate
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: -Dsonar.qualitygate.wait=true   # fail this step if the gate fails
+
+  image:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write             # allows requesting the GitHub OIDC token
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (once)
+        run: |
+          docker build \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg APP_VERSION=1.0.${{ github.run_number }} \
+            -t $APP:${{ github.sha }} .
+
+      - name: Trivy scan (fail on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: ${{ env.APP }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true    # don't block on issues nobody can patch yet
+          exit-code: '1'          # non-zero exit = failed step
+          format: table
+
+      - name: Configure AWS credentials (OIDC)
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        if: github.event_name == 'push'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push the scanned image
+        if: github.event_name == 'push'
+        run: |
+          docker tag $APP:${{ github.sha }} ${{ steps.ecr.outputs.registry }}/$APP:${{ github.sha }}
+          docker push ${{ steps.ecr.outputs.registry }}/$APP:${{ github.sha }}
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production       # pauses here until a reviewer approves
+    concurrency: production-deploy   # never two deploys at once
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+      - run: aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
+      - name: Helm deploy
+        run: |
+          helm upgrade --install shipit helm/shipit \
+            --namespace $NAMESPACE \
+            --set image.repository=${{ steps.ecr.outputs.registry }}/$APP \
+            --set image.tag=${{ github.sha }} \
+            --atomic --wait --timeout 5m --history-max 10
+      - name: Verify
+        run: |
+          kubectl -n $NAMESPACE rollout status deployment/shipit
+          kubectl -n $NAMESPACE get pods -o wide
