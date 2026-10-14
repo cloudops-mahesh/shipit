@@ -1,0 +1,50 @@
+name: rollback
+
+on:
+  workflow_dispatch:              # run manually from the Actions tab
+    inputs:
+      image_tag:
+        description: Commit SHA to redeploy. Leave empty to go back one Helm revision.
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  APP: shipit
+  CLUSTER_NAME: shipit
+  NAMESPACE: shipit
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: production       # rollbacks need approval too
+    concurrency: production-deploy   # can't run at the same time as a deploy
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+      - run: aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
+      - name: Roll back one Helm revision
+        if: inputs.image_tag == ''
+        run: helm rollback shipit --namespace $NAMESPACE --wait
+      - name: Redeploy a specific SHA
+        if: inputs.image_tag != ''
+        run: |
+          helm upgrade --install shipit helm/shipit \
+            --namespace $NAMESPACE \
+            --set image.repository=${{ steps.ecr.outputs.registry }}/$APP \
+            --set image.tag=${{ inputs.image_tag }} \
+            --atomic --wait --timeout 5m
+      - run: helm history shipit --namespace $NAMESPACE
