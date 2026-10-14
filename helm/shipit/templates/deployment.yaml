@@ -46,7 +46,7 @@ spec:
               drop: ["ALL"]          # remove every special Linux privilege
           readinessProbe:            # "is this pod ready for traffic?" If not, the Service skips it
             httpGet:
-              path: /nope
+              path: /healthz
               port: http
             periodSeconds: 5
           livenessProbe:             # "is this pod still alive?" If not, Kubernetes restarts it
