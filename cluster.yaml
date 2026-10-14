@@ -1,0 +1,19 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: shipit
+  region: ap-south-1
+accessConfig:
+  authenticationMode: API_AND_CONFIG_MAP
+vpc:
+  nat:
+    gateway: Disable            # no NAT gateway charge
+managedNodeGroups:
+  - name: spot
+    spot: true
+    instanceTypes: ["t3.medium", "t3a.medium"]
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 3
+    volumeSize: 20
+    privateNetworking: false    # public subnets (cost trade-off)
